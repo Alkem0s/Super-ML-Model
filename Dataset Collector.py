@@ -727,7 +727,9 @@ class SuperModelDatasetCollector:
                 'outlier_fraction': outlier_fraction,
             }
             
-            return metadata
+            dataset = [metadata]
+            
+            return dataset
             
         except Exception as e:
             return {
@@ -1484,23 +1486,32 @@ class SuperModelDatasetCollector:
         source_methods = {
             'openml': self.collect_openml_datasets,
             'kaggle': self.collect_kaggle_datasets,
-            #'local': self.process_single_dataset,
+            'local': self.process_single_dataset,
         }
         
         if weights is None:
-            weights = {source: 1 / len(source_methods) for source in source_methods}
-
-        total_weight = sum(weights.values())
-        weights = {source: weight / total_weight for source, weight in weights.items()}
-
+            weights = {'openml': 0.5, 'kaggle': 0.5, 'local': 0}
+        
+        if not any(weights.values()):
+            raise ValueError("At least one source must have a non-zero weight")
+        
+        active_sources = {k: v for k, v in weights.items() if v > 0}
+        total_weight = sum(active_sources.values())
+        normalized_weights = {source: weight / total_weight 
+                            for source, weight in weights.items()}
+        
         num_datasets_per_source = {
-            source: math.ceil(self.num_datasets * weights[source]) 
-            for source in source_methods
+            source: math.ceil(self.num_datasets * weight)
+            for source, weight in normalized_weights.items()
+            if weight > 0
         }
         
         all_datasets = []
         
         for source, method in source_methods.items():
+            if source not in num_datasets_per_source:
+                continue
+                
             try:
                 count = num_datasets_per_source[source]
                 print(f"Collecting {count} datasets from {source}...")
@@ -1526,7 +1537,7 @@ if __name__ == '__main__':
         num_datasets=300,
     )
     
-    weights = {'openml': 1.0, 'kaggle': 0.0}
+    weights = {'openml': 0.0, 'kaggle': 0.0, 'local': 0.0}
     datasets = collector.collect_suitable_datasets(weights)
     
-    datasets.to_csv('super_model_raw_dataset_openml.csv', index=False)
+    datasets.to_csv('super_model_raw_data.csv', index=False)
