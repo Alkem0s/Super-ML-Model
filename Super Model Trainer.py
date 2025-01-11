@@ -151,7 +151,6 @@ class AdvancedRegressionPipeline:
                 }
             }
             
-            # Add top 5 important features if available
             if target_name in self.feature_importances:
                 top_features = self.feature_importances[target_name].head(5)
                 results[target_name]['TopFeatures'] = [
@@ -162,18 +161,15 @@ class AdvancedRegressionPipeline:
                     for feature, importance in top_features.items()
                 ]
             
-            # Include base model metrics
             if target_name in self.base_model_results:
                 results[target_name]['BaseModels'] = self.base_model_results[target_name]
             
-            # Add sample predictions
             sample_predictions = pd.DataFrame({
                 'Actual': y_dict[target_name],
                 'Predicted': predictions[target_name]
-            }).head(5)  # Limit to first 5 for brevity
+            }).head(5)
             results[target_name]['SamplePredictions'] = sample_predictions.to_dict(orient='records')
         
-        # Convert results to nicely formatted JSON
         return json.dumps(results, indent=4)
     
     def save_results(self, results, file_name="model_results.json"):
