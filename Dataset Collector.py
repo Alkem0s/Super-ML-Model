@@ -1020,6 +1020,10 @@ class SuperModelDatasetCollector:
         try:
             y = pd.Series(y) if not isinstance(y, pd.Series) else y
             
+            if isinstance(X, pd.DataFrame) or isinstance(X, pd.Series):
+                X = X.reset_index(drop=True)
+                y = y.reset_index(drop=True)
+            
             if not np.issubdtype(y.dtype, np.integer):
                 y = y.astype(int)
             
@@ -1032,8 +1036,13 @@ class SuperModelDatasetCollector:
                 print(f"Warning: Removing {len(classes) - len(non_empty_classes)} empty classes from the dataset.")
             
             mask = y.isin(non_empty_classes)
-            X = X[mask]
-            y = y[mask]
+            
+            if isinstance(X, (pd.DataFrame, pd.Series)):
+                X = X.loc[mask.index[mask]]
+                y = y.loc[mask.index[mask]]
+            else:
+                X = X[mask.to_numpy()]
+                y = y[mask.to_numpy()]
 
             class_counts = np.bincount(y)
             max_class_size = np.max(class_counts)
