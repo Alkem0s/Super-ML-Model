@@ -18,7 +18,6 @@ class EnhancedSyntheticDataGenerator:
         self.maxs = self.df.max()
         self.correlations = self.df.corr()
         
-        # Feature groups for maintaining relationships
         self.feature_groups = {
             'samples': ['num_samples_original', 'num_samples_after_preprocessing'],
             'features': ['num_features_original', 'num_features_after_preprocessing',
@@ -28,7 +27,6 @@ class EnhancedSyntheticDataGenerator:
         }
         
     def _fit_models(self):
-        # Fit separate GMMs for different feature groups
         self.gmms = {}
         for group_name, features in self.feature_groups.items():
             group_data = self.df[features].values
@@ -42,32 +40,26 @@ class EnhancedSyntheticDataGenerator:
             self.gmms[group_name] = gmm
             
     def _adjust_feature_relationships(self, synthetic_data):
-        # Adjust samples relationship
         synthetic_data.loc[synthetic_data['num_samples_after_preprocessing'] > 
                          synthetic_data['num_samples_original'], 
                          'num_samples_after_preprocessing'] = \
             synthetic_data['num_samples_original']
             
-        # Adjust features relationship
         features_cols = ['binary_features', 'categorical_features', 'numeric_features']
         total_features = synthetic_data['num_features_after_preprocessing']
         
-        # Normalize feature counts to sum to total features
         features_sum = synthetic_data[features_cols].sum(axis=1)
         for col in features_cols:
             synthetic_data[col] = np.round(
                 synthetic_data[col] * total_features / features_sum
             )
             
-        # Ensure feature counts are non-negative integers
         synthetic_data[features_cols] = synthetic_data[features_cols].clip(lower=0)
         synthetic_data[features_cols] = synthetic_data[features_cols].round()
         
-        # Adjust performance metrics to realistic ranges
         performance_cols = ['linear_performance', 'nonlinear_performance', 'tree_performance']
         synthetic_data[performance_cols] = synthetic_data[performance_cols].clip(0, 1)
         
-        # Adjust correlation metrics
         synthetic_data['max_correlation'] = synthetic_data['max_correlation'].clip(
             synthetic_data['avg_feature_correlation'], 1
         )
@@ -78,30 +70,25 @@ class EnhancedSyntheticDataGenerator:
     def _generate_synthetic_samples(self, n_samples):
         synthetic_data = pd.DataFrame()
         
-        # Generate samples for each feature group
         for group_name, features in self.feature_groups.items():
             group_samples, _ = self.gmms[group_name].sample(n_samples)
             group_df = pd.DataFrame(group_samples, columns=features)
             
-            # Add controlled noise to increase variety
             for col in features:
                 noise = np.random.normal(0, self.stds[col] * 0.05, n_samples)
                 group_df[col] += noise
                 
-                # Clip to original bounds
                 group_df[col] = np.clip(
                     group_df[col],
                     self.mins[col],
                     self.maxs[col]
                 )
                 
-                # Round if integer
                 if np.issubdtype(self.df[col].dtype, np.integer):
                     group_df[col] = np.round(group_df[col])
             
             synthetic_data = pd.concat([synthetic_data, group_df], axis=1)
         
-        # Generate remaining features
         remaining_features = [col for col in self.df.columns 
                             if not any(col in group 
                                      for group in self.feature_groups.values())]
@@ -129,10 +116,8 @@ class EnhancedSyntheticDataGenerator:
             
             synthetic_data = pd.concat([synthetic_data, remaining_df], axis=1)
         
-        # Ensure column order matches original
         synthetic_data = synthetic_data[self.df.columns]
         
-        # Apply relationship adjustments
         synthetic_data = self._adjust_feature_relationships(synthetic_data)
         
         return synthetic_data
@@ -144,6 +129,8 @@ class EnhancedSyntheticDataGenerator:
             final_df = pd.concat([self.df, synthetic_df], ignore_index=True)
         else:
             final_df = synthetic_df
+            
+        final_df = final_df.dropna()  
             
         final_df.to_csv(output_file, index=False)
         
@@ -177,7 +164,7 @@ if __name__ == "__main__":
     
     generator = EnhancedSyntheticDataGenerator(input_file)
     synthetic_data = generator.generate_and_save(
-        n_samples=50,
+        n_samples=300,
         output_file=output_file,
         include_original=True
     )

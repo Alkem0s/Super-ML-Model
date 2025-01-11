@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, RobustScaler
@@ -17,9 +18,9 @@ class AdvancedRegressionPipeline:
         self.models = {}
         self.feature_importances = {}
         self.base_rf_models = {}
+        self.base_model_results = {}
         
     def preprocess_data(self, X):
-        """Apply robust scaling to handle potential outliers"""
         X_scaled = pd.DataFrame(index=X.index)
         
         for column in X.columns:
@@ -32,7 +33,6 @@ class AdvancedRegressionPipeline:
         return X_scaled
     
     def optimize_model(self, trial, X, y, target_name):
-        """Optuna optimization for hyperparameters"""
         model_type = trial.suggest_categorical('model_type', ['rf', 'gb'])
         
         if model_type == 'rf':
@@ -56,11 +56,9 @@ class AdvancedRegressionPipeline:
         return scores.mean()
     
     def build_stacking_model(self, X, y, target_name):
-        """Build a stacking model with optimized base models"""
         study = optuna.create_study(direction='maximize')
         study.optimize(lambda trial: self.optimize_model(trial, X, y, target_name), n_trials=20)
         
-        # Create and store a separate RF model for feature importance
         self.base_rf_models[target_name] = RandomForestRegressor(
             n_estimators=200, 
             max_depth=10,
@@ -68,7 +66,6 @@ class AdvancedRegressionPipeline:
         )
         self.base_rf_models[target_name].fit(X, y)
         
-        # Create optimized model based on best trial
         best_model_type = study.best_params['model_type']
         if best_model_type == 'rf':
             optimized_model = RandomForestRegressor(
@@ -87,14 +84,12 @@ class AdvancedRegressionPipeline:
                 random_state=self.random_state
             )
         
-        # Base models for stacking with default parameters
         rf = RandomForestRegressor(random_state=self.random_state)
         gb = GradientBoostingRegressor(random_state=self.random_state)
         svr = SVR(kernel='rbf')
         lasso = LassoCV(random_state=self.random_state)
         ridge = RidgeCV()
         
-        # Add the optimized model to the stack
         estimators = [
             ('optimized', optimized_model),
             ('rf', rf),
@@ -108,26 +103,31 @@ class AdvancedRegressionPipeline:
             estimators=estimators,
             final_estimator=RandomForestRegressor(random_state=self.random_state),
             cv=5
-        )
+        ), estimators
     
     def fit(self, X, y_dict):
-        """Fit the models for all target variables"""
         X_scaled = self.preprocess_data(X)
         
         for target_name, y in y_dict.items():
             print(f"\nTraining model for {target_name}...")
-            model = self.build_stacking_model(X_scaled, y, target_name)
+            model, base_estimators = self.build_stacking_model(X_scaled, y, target_name)
             model.fit(X_scaled, y)
             self.models[target_name] = model
             
-            # Store feature importances from the dedicated RF model
             self.feature_importances[target_name] = pd.Series(
                 self.base_rf_models[target_name].feature_importances_,
                 index=X.columns
             ).sort_values(ascending=False)
+
+            self.base_model_results[target_name] = {}
+            for name, base_model in base_estimators:
+                base_model.fit(X_scaled, y)
+                y_pred = base_model.predict(X_scaled)
+                mse = mean_squared_error(y, y_pred)
+                r2 = r2_score(y, y_pred)
+                self.base_model_results[target_name][name] = {'MSE': mse, 'R2': r2}
     
     def predict(self, X):
-        """Make predictions for all target variables"""
         X_scaled = self.preprocess_data(X)
         predictions = {}
         
@@ -137,7 +137,6 @@ class AdvancedRegressionPipeline:
         return predictions
     
     def evaluate(self, X, y_dict):
-        """Evaluate the models' performance"""
         predictions = self.predict(X)
         results = {}
         
@@ -145,42 +144,71 @@ class AdvancedRegressionPipeline:
             mse = mean_squared_error(y_dict[target_name], predictions[target_name])
             r2 = r2_score(y_dict[target_name], predictions[target_name])
             results[target_name] = {
-                'MSE': mse,
-                'RMSE': np.sqrt(mse),
-                'R2': r2
+                'Performance': {
+                    'MSE': mse,
+                    'RMSE': np.sqrt(mse),
+                    'R2': r2
+                }
             }
             
-        return results
+            # Add top 5 important features if available
+            if target_name in self.feature_importances:
+                top_features = self.feature_importances[target_name].head(5)
+                results[target_name]['TopFeatures'] = [
+                    {
+                        'Feature': feature,
+                        'Importance': importance
+                    }
+                    for feature, importance in top_features.items()
+                ]
+            
+            # Include base model metrics
+            if target_name in self.base_model_results:
+                results[target_name]['BaseModels'] = self.base_model_results[target_name]
+            
+            # Add sample predictions
+            sample_predictions = pd.DataFrame({
+                'Actual': y_dict[target_name],
+                'Predicted': predictions[target_name]
+            }).head(5)  # Limit to first 5 for brevity
+            results[target_name]['SamplePredictions'] = sample_predictions.to_dict(orient='records')
+        
+        # Convert results to nicely formatted JSON
+        return json.dumps(results, indent=4)
+    
+    def save_results(self, results, file_name="model_results.json"):
+        with open(file_name, 'w') as f:
+            json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
-    # Load and prepare the data
-    data = pd.read_csv('super_model_synthetic_dataset.csv')
+    df = pd.read_csv('super_model_synthetic_dataset.csv')
+    data = df.dropna()
 
-    # Separate features and targets
     target_columns = ['linear_performance', 'nonlinear_performance', 'tree_performance']
     feature_columns = [col for col in data.columns if col not in target_columns]
 
     X = data[feature_columns]
     y_dict = {target: data[target] for target in target_columns}
 
-    # Split the data
-    X_train, X_test = train_test_split(X, test_size=0.2, random_state=42)
-    y_train_dict = {target: data[target].iloc[X_train.index] for target in target_columns}
-    y_test_dict = {target: data[target].iloc[X_test.index] for target in target_columns}
+    X_train, X_test = train_test_split(X, test_size=0.2, random_state=42, shuffle=False)
 
-    # Train and evaluate the model
+    y_train_dict = {
+        target: data[target].loc[X_train.index] for target in target_columns
+    }
+    y_test_dict = {
+        target: data[target].loc[X_test.index] for target in target_columns
+    }
+
+
     pipeline = AdvancedRegressionPipeline()
     pipeline.fit(X_train, y_train_dict)
 
-    # Evaluate on test set
     results = pipeline.evaluate(X_test, y_test_dict)
 
-    # Print results and feature importances
-    for target_name, metrics in results.items():
-        print(f"\nResults for {target_name}:")
-        for metric_name, value in metrics.items():
-            print(f"{metric_name}: {value:.4f}")
-        
-        if target_name in pipeline.feature_importances:
-            print(f"\nTop 5 important features for {target_name}:")
-            print(pipeline.feature_importances[target_name].head())
+    print("Model Evaluation Results:")
+    print(results)
+
+    pipeline.save_results(
+        results=results,
+        file_name="model_results.json"
+    )
