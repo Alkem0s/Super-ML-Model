@@ -631,24 +631,6 @@ class SuperModelDatasetCollector:
 
         return suitable_datasets
 
-    
-    def read_csv_with_fallback(self, file_path, chunk_size=25000):
-        encodings_to_try = ['utf-8', 'ISO-8859-1', 'latin1', 'Windows-1252']
-        for encoding in encodings_to_try:
-            try:
-                print(f"Attempting to read {file_path} with encoding {encoding}")
-                return pd.read_csv(file_path, chunksize=chunk_size, encoding=encoding)
-            except UnicodeDecodeError:
-                print(f"Failed to read {file_path} with encoding {encoding}")
-        print(f"Attempting automatic detection of encoding for {file_path}")
-        with open(file_path, 'rb') as f:
-            raw_data = f.read(10000)
-            detected_encoding = chardet.detect(raw_data)['encoding']
-        if detected_encoding:
-            print(f"Detected encoding: {detected_encoding}")
-            return pd.read_csv(file_path, chunksize=chunk_size, encoding=detected_encoding)
-        raise ValueError(f"Unable to decode {file_path} with fallback encodings.")
-
     def read_csv(self, file_path, encoding_fallbacks=['utf-8', 'ISO-8859-1', 'latin1', 'Windows-1252']):
         for encoding in encoding_fallbacks:
             try:
