@@ -9,6 +9,8 @@ from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, r2_score
 import optuna
 import warnings
+import joblib
+import os
 warnings.filterwarnings('ignore')
 
 class AdvancedRegressionPipeline:
@@ -172,6 +174,23 @@ class AdvancedRegressionPipeline:
         
         return json.dumps(results, indent=4)
     
+    def save_models(self, folder_path="models/"):
+        os.makedirs(folder_path, exist_ok=True)
+        
+        for target_name, model in self.models.items():
+            file_path = os.path.join(folder_path, f"{target_name}_model.pkl")
+            joblib.dump(model, file_path)
+            print(f"Model for {target_name} saved at {file_path}")
+
+    def load_models(self, folder_path="models/"):
+        for target_name in self.models.keys():
+            file_path = os.path.join(folder_path, f"{target_name}_model.pkl")
+            if os.path.exists(file_path):
+                self.models[target_name] = joblib.load(file_path)
+                print(f"Model for {target_name} loaded from {file_path}")
+            else:
+                print(f"Model for {target_name} not found in {folder_path}")
+    
     def save_results(self, results, file_name="model_results.json"):
         with open(file_name, 'w') as f:
             json.dump(results, f, indent=4)
@@ -195,9 +214,10 @@ if __name__ == "__main__":
         target: data[target].loc[X_test.index] for target in target_columns
     }
 
-
     pipeline = AdvancedRegressionPipeline()
     pipeline.fit(X_train, y_train_dict)
+
+    pipeline.save_models(folder_path="saved_models/")
 
     results = pipeline.evaluate(X_test, y_test_dict)
 
