@@ -164,7 +164,7 @@ if __name__ == "__main__":
     
     generator = EnhancedSyntheticDataGenerator(input_file)
     synthetic_data = generator.generate_and_save(
-        n_samples=300,
+        n_samples=200,
         output_file=output_file,
         include_original=True
     )

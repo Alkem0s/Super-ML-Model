@@ -196,8 +196,7 @@ class AdvancedRegressionPipeline:
             json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
-    df = pd.read_csv('super_model_synthetic_dataset.csv')
-    data = df.dropna()
+    data = pd.read_csv('super_model_synthetic_dataset.csv')
 
     target_columns = ['linear_performance', 'nonlinear_performance', 'tree_performance']
     feature_columns = [col for col in data.columns if col not in target_columns]

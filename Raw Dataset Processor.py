@@ -52,6 +52,12 @@ def calculate_model_performance(row, model_prefixes):
     else:
         return None
 
+def clean_column_value(value):
+    try:
+        return ast.literal_eval(value)[0] if isinstance(value, str) and value.startswith("(") and value.endswith(",)") else value
+    except Exception:
+        return value
+
 def organize_ml_data(input_file):
     df = pd.read_csv(input_file)
     
@@ -113,6 +119,15 @@ def organize_ml_data(input_file):
         all_metadata.append(metadata)
     
     metadata_df = pd.DataFrame(all_metadata)
+    
+    metadata_df.dropna()
+    
+    if 'num_samples_original' in df.columns:
+        df['num_samples_original'] = df['num_samples_original'].apply(clean_column_value)
+
+    if 'num_features_original' in df.columns:
+        df['num_features_original'] = df['num_features_original'].apply(clean_column_value)
+    
     metadata_df.to_csv('super_model_processed_dataset.csv', index=False)
     
     return metadata_df
