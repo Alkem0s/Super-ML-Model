@@ -622,6 +622,10 @@ class SuperModelDatasetCollector:
                 
                 
                 suitable_datasets.append(metadata)
+                
+                df = pd.DataFrame(suitable_datasets)
+                            
+                df.to_csv('super_model_raw_dataset_openml.csv', index=False)
 
                 if len(suitable_datasets) >= num_datasets:
                     break
@@ -875,6 +879,10 @@ class SuperModelDatasetCollector:
                             
                             
                             suitable_datasets.append(metadata)
+                            
+                            df = pd.DataFrame(suitable_datasets)
+                            
+                            df.to_csv('super_model_raw_dataset_kaggle.csv', index=False)
                             
                             if len(suitable_datasets) >= num_datasets:
                                 folder_manager.switch_and_cleanup()
