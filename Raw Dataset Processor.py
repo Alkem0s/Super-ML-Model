@@ -58,9 +58,7 @@ def clean_column_value(value):
     except Exception:
         return value
 
-def organize_ml_data(input_file):
-    df = pd.read_csv(input_file)
-    
+def organize_ml_data(df):
     model_groups = get_model_groups(df.columns)
     
     all_metadata = []
@@ -79,7 +77,10 @@ def organize_ml_data(input_file):
         
         class_dist = safe_dict_convert(row['class_distribution'])
         class_dist_values = list(class_dist.values())
-        class_imbalance = max(class_dist_values) / min(class_dist_values) if min(class_dist_values) > 0 else float('inf')
+        ratio = max(class_dist_values) / min(class_dist_values) if min(class_dist_values) > 0 else float('inf')
+        if np.isinf(ratio):
+            class_imbalance = 1.0
+        class_imbalance = (ratio - 1) / (ratio + 1)
         
         complexity_metrics = {
             'variance_explained': row.get('variance_explained_5_components', 0),
@@ -120,16 +121,6 @@ def organize_ml_data(input_file):
     
     metadata_df = pd.DataFrame(all_metadata)
     
-    metadata_df.dropna()
-    
-    if 'num_samples_original' in df.columns:
-        df['num_samples_original'] = df['num_samples_original'].apply(clean_column_value)
-
-    if 'num_features_original' in df.columns:
-        df['num_features_original'] = df['num_features_original'].apply(clean_column_value)
-    
-    metadata_df.to_csv('super_model_processed_dataset.csv', index=False)
-    
     return metadata_df
 
 if __name__ == "__main__":
@@ -139,9 +130,22 @@ if __name__ == "__main__":
     df1 = pd.read_csv(openml_datasets)
     df2 = pd.read_csv(kaggle_datasets)
 
-    df = pd.concat([df1, df2], ignore_index=True)
+    df3 = pd.concat([df1, df2], ignore_index=True)
 
     output_file = "super_model_raw_dataset.csv"
-    df.to_csv(output_file, index=False)
+    df3.to_csv(output_file, index=False)
     
-    metadata = organize_ml_data('super_model_raw_dataset.csv')
+    df = organize_ml_data(df3)
+    
+    df.dropna()
+
+    if 'num_samples_original' in df.columns:
+        df['num_samples_original'] = df['num_samples_original'].apply(clean_column_value)
+
+    if 'num_features_original' in df.columns:
+        df['num_features_original'] = df['num_features_original'].apply(clean_column_value)
+    
+    if 'avg_feature_correlation' in df.columns and 'max_correlation' in df.columns:
+        df = df[(df['avg_feature_correlation'] != 0.0) & (df['max_correlation'] != 0.0)]
+    
+    df.to_csv('super_model_processed_dataset.csv', index=False)

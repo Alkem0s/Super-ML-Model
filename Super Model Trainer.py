@@ -222,5 +222,5 @@ if __name__ == "__main__":
 
     pipeline.save_results(
         results=results,
-        file_name="model_results.json"
+        file_name="model_results_synthetic2.json"
     )

@@ -23,30 +23,19 @@ class EnhancedSyntheticDataGenerator:
             'features': ['num_features_original', 'num_features_after_preprocessing',
                         'binary_features', 'categorical_features', 'numeric_features'],
             'performance': ['linear_performance', 'nonlinear_performance', 'tree_performance'],
-            'correlations': ['avg_feature_correlation', 'max_correlation'],
-            'imbalance': ['class_imbalance']
+            'correlations': ['avg_feature_correlation', 'max_correlation']
         }
         
     def _fit_models(self):
         self.gmms = {}
         for group_name, features in self.feature_groups.items():
             group_data = self.df[features].values
-            
-            if group_name == 'imbalance':
-                n_components = min(len(self.df) // 20, 3)
-                gmm = GaussianMixture(
-                    n_components=n_components,
-                    covariance_type='tied',
-                    random_state=42
-                )
-            else:
-                n_components = min(len(self.df) // 10, 5)
-                gmm = GaussianMixture(
-                    n_components=n_components,
-                    covariance_type='full',
-                    random_state=42
-                )
-            
+            n_components = min(len(self.df) // 10, 5)
+            gmm = GaussianMixture(
+                n_components=n_components,
+                covariance_type='full',
+                random_state=42
+            )
             gmm.fit(group_data)
             self.gmms[group_name] = gmm
             
@@ -76,23 +65,6 @@ class EnhancedSyntheticDataGenerator:
         )
         synthetic_data['avg_feature_correlation'] = synthetic_data['avg_feature_correlation'].clip(0, 1)
         
-        if 'class_imbalance' in synthetic_data.columns:
-            orig_mean = self.df['class_imbalance'].mean()
-            orig_std = self.df['class_imbalance'].std()
-            
-            synthetic_data['class_imbalance'] = synthetic_data['class_imbalance'].clip(
-                lower=max(0, orig_mean - 2*orig_std),
-                upper=orig_mean + 2*orig_std
-            )
-            
-            synthetic_data['class_imbalance'] = np.where(
-                synthetic_data['class_imbalance'] > orig_mean,
-                orig_mean + (synthetic_data['class_imbalance'] - orig_mean) * 0.7,
-                synthetic_data['class_imbalance']
-            )
-            
-            synthetic_data['class_imbalance'] = synthetic_data['class_imbalance'].clip(0, 1)
-        
         return synthetic_data
         
     def _generate_synthetic_samples(self, n_samples):
@@ -103,8 +75,7 @@ class EnhancedSyntheticDataGenerator:
             group_df = pd.DataFrame(group_samples, columns=features)
             
             for col in features:
-                noise_scale = 0.02 if col == 'class_imbalance' else 0.05
-                noise = np.random.normal(0, self.stds[col] * noise_scale, n_samples)
+                noise = np.random.normal(0, self.stds[col] * 0.05, n_samples)
                 group_df[col] += noise
                 
                 group_df[col] = np.clip(
@@ -193,7 +164,7 @@ if __name__ == "__main__":
     
     generator = EnhancedSyntheticDataGenerator(input_file)
     synthetic_data = generator.generate_and_save(
-        n_samples=200,
+        n_samples=400,
         output_file=output_file,
         include_original=True
     )
