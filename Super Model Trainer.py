@@ -172,7 +172,7 @@ class AdvancedRegressionPipeline:
             }).head(5)
             results[target_name]['SamplePredictions'] = sample_predictions.to_dict(orient='records')
         
-        return json.dumps(results, indent=4)
+        return results
     
     def save_models(self, folder_path="models/"):
         os.makedirs(folder_path, exist_ok=True)
@@ -219,9 +219,6 @@ if __name__ == "__main__":
     pipeline.save_models(folder_path="saved_models/")
 
     results = pipeline.evaluate(X_test, y_test_dict)
-
-    print("Model Evaluation Results:")
-    print(results)
 
     pipeline.save_results(
         results=results,
