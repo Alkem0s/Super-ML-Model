@@ -15,7 +15,7 @@ import joblib
 import os
 warnings.filterwarnings('ignore')
 
-class EnhancedRegressionPipeline:
+class RegressionPipeline:
     def __init__(self, random_state=42, n_splits=5):
         self.random_state = random_state
         self.n_splits = n_splits
@@ -224,12 +224,13 @@ class EnhancedRegressionPipeline:
                 'Actual': y_dict[target_name],
                 'Predicted': predictions[target_name]
             }).head(100)
+            
             results[target_name]['SamplePredictions'] = sample_predictions.to_dict(orient='records')
         
         return results
 
 if __name__ == "__main__":
-    data = pd.read_csv('super_model_synthetic_dataset.csv')
+    data = pd.read_csv('super_model_processed_dataset.csv')
     
     target_columns = ['linear_performance', 'nonlinear_performance', 'tree_performance']
     feature_columns = [col for col in data.columns if col not in target_columns]
@@ -241,9 +242,9 @@ if __name__ == "__main__":
     y_train_dict = {target: data[target].loc[X_train.index] for target in target_columns}
     y_test_dict = {target: data[target].loc[X_test.index] for target in target_columns}
     
-    pipeline = EnhancedRegressionPipeline()
+    pipeline = RegressionPipeline()
     pipeline.fit(X_train, y_train_dict)
     results = pipeline.evaluate(X_test, y_test_dict)
     
-    with open("enhanced_model_results_synthetic.json", 'w') as f:
+    with open("model_results_original.json", 'w') as f:
         json.dump(results, f, indent=4)
