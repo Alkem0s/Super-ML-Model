@@ -12,22 +12,25 @@ from sklearn.impute import SimpleImputer
 import optuna
 import warnings
 import joblib
-import os
+from typing import Dict, List, Tuple, Any
+import logging
+
 warnings.filterwarnings('ignore')
+logging.basicConfig(level=logging.INFO)
 
 class RegressionPipeline:
-    def __init__(self, random_state=42, n_splits=5):
+    def __init__(self, random_state: int = 42, n_splits: int = 5, n_trials: int = 50):
         self.random_state = random_state
         self.n_splits = n_splits
-        self.models = {}
-        self.preprocessors = {}
-        self.feature_importances = {}
-        self.base_rf_models = {}
-        self.base_model_results = {}
+        self.n_trials = n_trials
+        self.models: Dict = {}
+        self.preprocessors: Dict = {}
+        self.feature_importances: Dict = {}
+        self.cv_results: Dict = {}
         
-    def create_preprocessor(self, X):
-        numeric_features = X.select_dtypes(include=['int64', 'float64']).columns
-        categorical_features = X.select_dtypes(include=['object', 'category']).columns
+    def _create_preprocessor(self, X: pd.DataFrame):
+        numeric_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        categorical_features = X.select_dtypes(include=['object', 'category']).columns.tolist()
         
         numeric_transformer = Pipeline(steps=[
             ('imputer', SimpleImputer(strategy='median')),
@@ -44,43 +47,39 @@ class RegressionPipeline:
                 ('num', numeric_transformer, numeric_features),
                 ('cat', categorical_transformer, categorical_features)
             ],
-            remainder='passthrough'
+            remainder='drop',
+            verbose_feature_names_out=True
         )
         
-        return preprocessor
+        transformed_features = (
+            [f'num__{feat}' for feat in numeric_features] +
+            [f'cat__{feat}' for feat in categorical_features]
+        )
+        
+        return preprocessor, transformed_features
     
-    def custom_cv_score(self, model, X, y):
+    def _get_cv_scores(self, model: Any, X: np.ndarray, y: np.ndarray):
         cv = KFold(n_splits=self.n_splits, shuffle=True, random_state=self.random_state)
-        cv_scores = {
-            'r2': [],
-            'mse': [],
-            'rmse': []
+        
+        scorers = {
+            'r2': make_scorer(r2_score),
+            'neg_mse': make_scorer(mean_squared_error, greater_is_better=False)
         }
         
-        y_np = y.to_numpy() if isinstance(y, pd.Series) else y
-        
-        for train_idx, val_idx in cv.split(X):
-            X_train_cv, X_val_cv = X[train_idx], X[val_idx]
-            y_train_cv, y_val_cv = y_np[train_idx], y_np[val_idx]
+        cv_results = {}
+        for scorer_name, scorer in scorers.items():
+            scores = cross_val_score(model, X, y, scoring=scorer, cv=cv, n_jobs=-1)
             
-            model.fit(X_train_cv, y_train_cv)
-            y_pred = model.predict(X_val_cv)
-            
-            cv_scores['r2'].append(r2_score(y_val_cv, y_pred))
-            mse = mean_squared_error(y_val_cv, y_pred)
-            cv_scores['mse'].append(mse)
-            cv_scores['rmse'].append(np.sqrt(mse))
-        
-        return {
-            'r2_mean': np.mean(cv_scores['r2']),
-            'r2_std': np.std(cv_scores['r2']),
-            'mse_mean': np.mean(cv_scores['mse']),
-            'mse_std': np.std(cv_scores['mse']),
-            'rmse_mean': np.mean(cv_scores['rmse']),
-            'rmse_std': np.std(cv_scores['rmse'])
-        }
+            if scorer_name == 'neg_mse':
+                scores = -scores
+                cv_results['mse'] = {'mean': scores.mean(), 'std': scores.std()}
+                cv_results['rmse'] = {'mean': np.sqrt(scores).mean(), 'std': np.sqrt(scores).std()}
+            else:
+                cv_results[scorer_name] = {'mean': scores.mean(), 'std': scores.std()}
+                
+        return cv_results
     
-    def optimize_model(self, trial, X, y, target_name):
+    def _optimize_model(self, trial: optuna.Trial, X: np.ndarray, y: np.ndarray):
         model_type = trial.suggest_categorical('model_type', ['rf', 'gb'])
         
         if model_type == 'rf':
@@ -89,7 +88,7 @@ class RegressionPipeline:
                 'max_depth': trial.suggest_int('max_depth', 5, 30),
                 'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
                 'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 5),
-                'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None])
+                'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2'])
             }
             model = RandomForestRegressor(**params, random_state=self.random_state)
         else:
@@ -98,153 +97,144 @@ class RegressionPipeline:
                 'learning_rate': trial.suggest_loguniform('learning_rate', 0.001, 0.1),
                 'max_depth': trial.suggest_int('max_depth', 3, 10),
                 'subsample': trial.suggest_uniform('subsample', 0.6, 1.0),
-                'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2', None])
+                'max_features': trial.suggest_categorical('max_features', ['sqrt', 'log2'])
             }
             model = GradientBoostingRegressor(**params, random_state=self.random_state)
         
-        cv_results = self.custom_cv_score(model, X, y)
-        return cv_results['r2_mean']
+        cv_scores = self._get_cv_scores(model, X, y)
+        return cv_scores['r2']['mean']
     
-    def build_stacking_model(self, X, y, target_name):
+    def _build_stacking_model(self, X: np.ndarray, y: np.ndarray, transformed_features: List[str]):
         study = optuna.create_study(direction='maximize')
-        study.optimize(lambda trial: self.optimize_model(trial, X, y, target_name), n_trials=20)
-        
-        self.base_rf_models[target_name] = RandomForestRegressor(
-            n_estimators=200,
-            max_depth=10,
-            random_state=self.random_state
-        )
-        self.base_rf_models[target_name].fit(X, y)
+        study.optimize(lambda trial: self._optimize_model(trial, X, y), n_trials=self.n_trials)
         
         best_params = study.best_params
-        if best_params['model_type'] == 'rf':
-            optimized_model = RandomForestRegressor(
-                n_estimators=best_params['n_estimators'],
-                max_depth=best_params['max_depth'],
-                min_samples_split=best_params['min_samples_split'],
-                min_samples_leaf=best_params['min_samples_leaf'],
-                max_features=best_params['max_features'],
-                random_state=self.random_state
-            )
-        else:
-            optimized_model = GradientBoostingRegressor(
-                n_estimators=best_params['n_estimators'],
-                learning_rate=best_params['learning_rate'],
-                max_depth=best_params['max_depth'],
-                subsample=best_params['subsample'],
-                max_features=best_params['max_features'],
-                random_state=self.random_state
-            )
+        model_type = best_params.pop('model_type')
         
-        estimators = [
+        if model_type == 'rf':
+            optimized_model = RandomForestRegressor(**best_params, random_state=self.random_state)
+        else:
+            optimized_model = GradientBoostingRegressor(**best_params, random_state=self.random_state)
+        
+        base_estimators = [
             ('optimized', optimized_model),
-            ('rf', RandomForestRegressor(random_state=self.random_state)),
-            ('gb', GradientBoostingRegressor(random_state=self.random_state)),
-            ('svr', SVR(kernel='rbf')),
+            ('rf', RandomForestRegressor(n_estimators=200, random_state=self.random_state)),
+            ('gb', GradientBoostingRegressor(n_estimators=200, random_state=self.random_state)),
+            ('svr', SVR(kernel='rbf', C=1.0))
         ]
         
-        return StackingRegressor(
-            estimators=estimators,
-            final_estimator=RandomForestRegressor(random_state=self.random_state),
+        feature_importance_models = {}
+        for name, model in base_estimators:
+            if hasattr(model, 'feature_importances_'):
+                feature_importance_models[name] = {
+                    'model': model,
+                    'features': transformed_features
+                }
+        
+        stacking_model = StackingRegressor(
+            estimators=base_estimators,
+            final_estimator=RandomForestRegressor(n_estimators=100, random_state=self.random_state),
             cv=self.n_splits,
-            passthrough=True,
+            passthrough=False,
             n_jobs=-1
-        ), estimators
+        )
+        
+        return stacking_model, base_estimators, feature_importance_models
     
-    def fit(self, X, y_dict):
+    def fit(self, X: pd.DataFrame, y_dict: Dict[str, pd.Series]) -> None:
         for target_name, y in y_dict.items():
-            print(f"\nTraining model for {target_name}...")
+            logging.info(f"Training model for {target_name}...")
             
-            self.preprocessors[target_name] = self.create_preprocessor(X)
-            X_processed = self.preprocessors[target_name].fit_transform(X)
+            preprocessor, transformed_features = self._create_preprocessor(X)
+            X_processed = preprocessor.fit_transform(X)
+            self.preprocessors[target_name] = preprocessor
+            self.feature_names[target_name] = transformed_features
             
-            model, base_estimators = self.build_stacking_model(X_processed, y, target_name)
-            model.fit(X_processed, y)
+            model, base_estimators, feature_importance_models = self._build_stacking_model(
+                X_processed, y.values, transformed_features
+            )
+            model.fit(X_processed, y.values)
             self.models[target_name] = model
             
-            self.feature_importances[target_name] = pd.Series(
-                self.base_rf_models[target_name].feature_importances_,
-                index=X.columns
-            ).sort_values(ascending=False)
-            
-            self.base_model_results[target_name] = {}
+            self.cv_results[target_name] = {}
             for name, base_model in base_estimators:
-                cv_results = self.custom_cv_score(base_model, X_processed, y)
-                self.base_model_results[target_name][name] = {
-                    'MSE': cv_results['mse_mean'],
-                    'MSE_std': cv_results['mse_std'],
-                    'R2': cv_results['r2_mean'],
-                    'R2_std': cv_results['r2_std']
-                }
-    
-    def predict(self, X):
-        predictions = {}
-        
-        for target_name, model in self.models.items():
-            X_processed = self.preprocessors[target_name].transform(X)
-            predictions[target_name] = model.predict(X_processed)
+                self.cv_results[target_name][name] = self._get_cv_scores(base_model, X_processed, y.values)
             
-        return predictions
+            self.feature_importances[target_name] = {}
+            for name, model_info in feature_importance_models.items():
+                if hasattr(model.named_estimators_[name], 'feature_importances_'):
+                    importances = pd.Series(
+                        model.named_estimators_[name].feature_importances_,
+                        index=model_info['features']
+                    ).sort_values(ascending=False)
+                    self.feature_importances[target_name][name] = importances
     
-    def evaluate(self, X, y_dict):
+    def evaluate(self, X: pd.DataFrame, y_dict: Dict[str, pd.Series]):
         predictions = self.predict(X)
         results = {}
         
-        for target_name in y_dict.keys():
-            mse = mean_squared_error(y_dict[target_name], predictions[target_name])
-            r2 = r2_score(y_dict[target_name], predictions[target_name])
+        for target_name, y_true in y_dict.items():
+            y_pred = predictions[target_name]
+            
+            if isinstance(y_true, pd.Series):
+                y_true = y_true.values
             
             results[target_name] = {
                 'Performance': {
-                    'MSE': mse,
-                    'RMSE': np.sqrt(mse),
-                    'R2': r2,
-                    'CV_Results': self.custom_cv_score(
-                        self.models[target_name],
-                        self.preprocessors[target_name].transform(X),
-                        y_dict[target_name]
-                    )
+                    'MSE': float(mean_squared_error(y_true, y_pred)),
+                    'RMSE': float(np.sqrt(mean_squared_error(y_true, y_pred))),
+                    'R2': float(r2_score(y_true, y_pred)),
+                    'CV_Results': self.cv_results[target_name]
                 }
             }
             
             if target_name in self.feature_importances:
-                top_features = self.feature_importances[target_name].head(10)
-                results[target_name]['TopFeatures'] = [
-                    {
-                        'Feature': feature,
-                        'Importance': importance
-                    }
-                    for feature, importance in top_features.items()
-                ]
+                results[target_name]['FeatureImportances'] = {}
+                for model_name, importances in self.feature_importances[target_name].items():
+                    top_features = importances.head(10)
+                    results[target_name]['FeatureImportances'][model_name] = [
+                        {'Feature': feature, 'Importance': float(importance)}
+                        for feature, importance in top_features.items()
+                    ]
             
-            if target_name in self.base_model_results:
-                results[target_name]['BaseModels'] = self.base_model_results[target_name]
-            
+            sample_size = min(100, len(y_true))
+            sample_indices = np.random.choice(len(y_true), sample_size, replace=False)
             sample_predictions = pd.DataFrame({
-                'Actual': y_dict[target_name],
-                'Predicted': predictions[target_name]
-            }).head(100)
+                'Actual': y_true[sample_indices],
+                'Predicted': y_pred[sample_indices]
+            })
             
             results[target_name]['SamplePredictions'] = sample_predictions.to_dict(orient='records')
         
         return results
+    
+    def predict(self, X: pd.DataFrame) -> Dict[str, np.ndarray]:
+        predictions = {}
+        for target_name, model in self.models.items():
+            try:
+                X_processed = self.preprocessors[target_name].transform(X)
+                predictions[target_name] = model.predict(X_processed)
+            except Exception as e:
+                logging.error(f"Error predicting {target_name}: {str(e)}")
+                raise
+        return predictions
 
 if __name__ == "__main__":
-    data = pd.read_csv('super_model_processed_dataset.csv')
+    data = pd.read_csv('super_model_synthetic_dataset.csv')
     
     target_columns = ['linear_performance', 'nonlinear_performance', 'tree_performance']
     feature_columns = [col for col in data.columns if col not in target_columns]
     
-    X = data[feature_columns]
-    y_dict = {target: data[target] for target in target_columns}
+    train_idx, test_idx = train_test_split(np.arange(len(data)), test_size=0.2, random_state=42, shuffle=True)
     
-    X_train, X_test = train_test_split(X, test_size=0.2, random_state=42, shuffle=True)
-    y_train_dict = {target: data[target].loc[X_train.index] for target in target_columns}
-    y_test_dict = {target: data[target].loc[X_test.index] for target in target_columns}
+    X_train = data.loc[train_idx, feature_columns]
+    X_test = data.loc[test_idx, feature_columns]
+    y_train_dict = {target: data.loc[train_idx, target] for target in target_columns}
+    y_test_dict = {target: data.loc[test_idx, target] for target in target_columns}
     
-    pipeline = RegressionPipeline()
+    pipeline = RegressionPipeline(n_trials=50)
     pipeline.fit(X_train, y_train_dict)
     results = pipeline.evaluate(X_test, y_test_dict)
     
-    with open("model_results_original.json", 'w') as f:
+    with open("model_results_synthetic.json", 'w') as f:
         json.dump(results, f, indent=4)
