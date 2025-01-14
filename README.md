@@ -1,6 +1,6 @@
 # Predicting Machine Learning Model Performance from Dataset Characteristics
 
-A framework to predict the performance of various machine learning models—linear, non-linear, and tree-based—based on key characteristics of classification datasets.
+A project to predict the performance of various machine learning models—linear, non-linear, and tree-based—based on key characteristics of classification datasets.
 
 ---
 
